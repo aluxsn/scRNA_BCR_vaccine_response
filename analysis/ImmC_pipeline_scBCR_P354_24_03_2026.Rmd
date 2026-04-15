@@ -1,0 +1,1463 @@
+
+title: "sc BCR 0354"
+output: html_notebook
+
+
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(alakazam)
+library(dowser)
+library(dplyr)
+library(ggplot2)
+library(ggtree)
+library(scoper)
+library(scRepertoire)
+library(shazam)
+library(stringr)
+library(Seurat)
+library(tibble)
+library(viridis)
+library(patchwork)
+# Using standard ggplot theme
+theme_vignette <- scRepertoire:::.themeRepertoire
+
+dir.exists("C:/Users/209352/OneDrive - UPEC/SC_aCD40_BCR_vaccins")
+list.files("C:/Users/209352/OneDrive - UPEC/SC_aCD40_BCR_vaccins")
+
+
+# Recursively find files that match the igBlast output
+folder = "C:/Users/209352/OneDrive - UPEC/SC_aCD40_BCR_vaccins/0354_Alignment_results/"
+subject_id <- "0354"
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+
+# Recursively find files that match the igBlast output
+file.list <- list.files(
+  path = folder,
+  pattern = "all_contig_igblast_db-pass.tsv",
+  recursive = TRUE
+)
+
+# Generating Categorical Variables to use Downstream
+sample_id <- sub("_[0-9]+_(BCR_)?all_contig_igblast_db-pass\\.tsv$", "", file.list)
+
+#sample_id <- sub("_[0-9]+_BCR_all_contig_igblast_db-pass\\.tsv$", "", file.list)
+# sample_id <- sub("_[0-9]+_all_contig_igblast_db-pass\\.tsv$", "", file.list)
+#subject_id <- sample_id  # adapt if you want to collapse by patient
+```
+
+
+```{r, echo=FALSE}
+# Iterative Processing and Filtering of Each Sample 
+lib_data <- lapply(seq_along(file.list), function(x) {
+ 
+  tmp <- read.delim(file.path(folder, file.list[x]))
+  tmp$sample_id <- sample_id[x]
+  tmp$subject_id <- "0354"
+  tmp$cell_id <- str_split(tmp$sequence_id, "_", simplify = TRUE)[, 1]
+  tmp$cell_id_unique <- paste0(sample_id[x], "_", tmp$cell_id)
+ 
+  # Data Cleaning and Filtering Steps
+  if (any(tmp$productive == "TRUE")) {
+    tmp <- tmp %>% filter(productive == TRUE)
+  } else if (any(tmp$productive == "T")) {
+    tmp <- tmp %>% filter(productive == "T")
+  }
+ 
+  # Remove cells that have more than one heavy chain contig assigned.
+  multi_heavy <- tmp %>%
+    filter(locus == "IGH") %>%
+    count(cell_id)
+ 
+  multi_heavy_cells <- multi_heavy %>%
+    filter(n > 1) %>%
+    pull(cell_id)
+ 
+  tmp <- tmp %>% filter(!cell_id %in% multi_heavy_cells)
+ 
+  # Standardize isotype calls ('c_call').
+  tmp$c_call <- str_split(tmp$c_call, ",", simplify = TRUE)[, 1]
+ 
+  # Remove any records where an isotype could not be determined.
+  tmp <- tmp %>% filter(c_call != "")
+ 
+  # Ensure all remaining cells have a paired heavy chain.
+  heavy_cells <- tmp %>% filter(locus == "IGH") %>% pull(cell_id)
+  light_cells <- tmp %>% filter(locus %in% c("IGK","IGL")) %>% pull(cell_id)
+  no_heavy_cells <- setdiff(light_cells, heavy_cells)
+ 
+  tmp <- tmp %>% filter(!cell_id %in% no_heavy_cells)
+ 
+  return(tmp)
+})
+
+# Combining all the data together
+bcr_db_0354 <- do.call(rbind, lib_data)
+
+
+# SUPPRIME TOUTES les chaînes d'une cellule si elle a >1 IGH
+igh_per_cell <- bcr_db_0354 %>%
+  filter(locus == "IGH") %>%
+  count(cell_id_unique) %>%
+  filter(n > 1) %>%
+  pull(cell_id_unique)
+
+bcr_db_0354 <- bcr_db_0354 %>%
+  filter(!cell_id_unique %in% igh_per_cell)
+
+# Doit retourner 0
+bcr_db_0354 %>% 
+  filter(locus == "IGH") %>% 
+  count(cell_id_unique) %>% 
+  filter(n > 1) %>% 
+  nrow()
+bcr_db_0354$subject_id <-  "0354"
+saveRDS(bcr_db_0354, paste0(folder,"Files/Immcantation_bcr_db_vaccins_23_03_2026.rds"))
+```
+
+
+
+##### Determining a Clonal Assignment Threshold
+####### Calculate Nearest Neighbor Distances (distToNearest)
+```{r, echo=FALSE}
+bcr_db_0354  <- readRDS(paste0(folder,"Files/Immcantation_bcr_db_vaccins_23_03_2026.rds"))
+unique(bcr_db_0354$sample_id)
+# 
+bcr_db_0354 <- bcr_db_0354 %>%
+  mutate(
+    sample_id = case_when(
+      # sample_id == "Naive_B_cells"   ~ "Naive_Bcells",
+      # sample_id == "BMZ_B_cells"     ~ "BMZ_Bcells",
+      sample_id == "Spike"   ~ "Spikepos",
+      
+      TRUE ~ sample_id   # au cas où
+    )
+  )
+
+
+unique(bcr_db_0354$sample_id)
+
+bcr_db_0354$sample_id <- factor(bcr_db_0354$sample_id, 
+                                 levels = c("Naive", "BMZ", "Memory", "Spikepos" ,  "Novavax_CTVpos", "Novavax_CTVneg", "Sanofi_CTVpos","Sanofi_CTVneg", "CD40cov2_CTVpos","CD40cov2_CTVneg"))
+
+# Calcul des distances au plus proche voisin (heavy only, par sample_id)
+dist_heavy_0354_new <- distToNearest(bcr_db_0354,    ##### package => shazam
+                            cellIdColumn = "cell_id_unique",
+                            first = FALSE,
+                            onlyHeavy = TRUE,  #Note that distances between light/short (IGK, IGL, TRA, TRG) chain sequences are not calculated, even if light/short chains were used for V-J-length grouping via onlyHeavy=FALSE. Light/short chain sequences, if any, will have NA in the dist_nearest output column
+                            fields = "sample_id",  # distances calculées séparément par sample_id
+                            nproc = 2, 
+                            progress = TRUE)
+```
+```{r, echo= FALSE}
+saveRDS(dist_heavy_0354_new, paste0(folder, "Files/dist_heavy_0354_new_24_03_2026.rds"))
+```
+
+##### Find the Threshold Automatically (findThreshold)
+```{r, echo=FALSE}
+dist_heavy_0354_new  <- readRDS(paste0(folder, "Files/dist_heavy_0354_new_24_03_2026.rds"))
+# Find threshold for cloning automatically
+
+# 2) Estimation automatique du seuil optimal de clonage
+threshold_output <- findThreshold(
+  dist_heavy_0354_new$dist_nearest,
+  progress = TRUE,
+  method   = "gmm",         # ajustement par mélange de distributions
+  model    = "gamma-norm",  # gamma pour distances intra-clone, normale pour inter-clone
+  cutoff   = "optimal"      # choisit le seuil qui maximise (sensibilité + spécificité)/2
+)
+
+saveRDS(threshold_output, paste0(folder, "Files/threshold_output_0354_24_03_2026.rds"))
+
+```
+
+```{r, echo=FALSE, fig.height=6}
+threshold_output <- readRDS(paste0(folder, "Files/threshold_output_0354_24_03_2026.rds"))
+threshold_auto <- threshold_output@threshold
+P1 <- ggplot(subset(dist_heavy_0354_new, !is.na(dist_nearest)),
+             aes(x = dist_nearest)) +
+  theme_vignette() +
+  xlab("Hamming distance") + 
+  ylab("Count") +
+  scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+  geom_histogram(color = "white", binwidth = 0.02) +
+  geom_vline(xintercept = threshold_auto, lty=2, color='red') +
+  facet_grid(sample_id ~ ., scales="free_y") +
+  theme(strip.text.y.right = element_text(angle = 0))
+P1
+
+ggsave(paste0(folder, "Figures/0354_nearest_neighbor_distance_new_24_03_2026.png"), P1, bg = "white", width = 9, height = 7, dpi = 1000)
+```
+
+###### Expansion clonale : 
+
+
+###Defining and Quantifying Clonal Groups
+#####With the distance threshold established, we can now formally partition our sequences into clonal lineages. This step uses the scoper package to apply the threshold and assign a unique clone ID to each sequence. We will then visualize the resulting clone size distributions, which is a fundamental way to characterize an immune repertoire.
+
+#####Assigning Sequences to Clones (hierarchicalClones)
+```{r, echo=FALSE}
+# call clones based on heavy chain
+# keep light chain information for subclone calling later
+results_0354 <- hierarchicalClones(dist_heavy_0354_new,    ##### package => scoper
+                              cell_id = 'cell_id_unique',
+                              threshold = threshold_auto, 
+                              only_heavy = TRUE, #défaut maintenant, pas besoin... only_heavy = FALSE est déprécié**, n'existe plus dans la nouvelle version de scoper  #Clustering distances : IGH + IGK/IGL ensemble
+                              split_light = FALSE,  # Pas de subdivision light après clustering
+                              summarize_clones = TRUE,
+                              nproc = 2, 
+                              verbose = TRUE)
+# results_0354 <- results_0354_hf 
+# rm(results_0354_hf)
+results_db_0354_hf <- as.data.frame(results_0354)
+results_db_0354_hf$sequence_id <- paste0(results_db_0354_hf$sample_id, "_", results_db_0354_hf$sequence_id)
+```
+
+####Counting Clone Sizes (countClones)
+######Now that clones are defined, a common first analysis is to quantify their sizes. How many cells belong to each clone?
+```{r, echo=FALSE}
+
+# get clone sizes per subject
+clone_sizes_0354 <- countClones(results_db_0354_hf,
+                           groups=c("locus", "sample_id"))
+
+P1 <- clone_sizes_0354 %>% 
+  filter(locus=="IGH") %>%
+  ggplot(aes(x=seq_count)) +
+    geom_bar(fill = "black", color = "black") + 
+    geom_text(aes(label=seq_count, y=1), vjust=1.5, size=1) +
+    facet_wrap(~sample_id) +
+    scale_y_log10() +
+    scale_x_sqrt() +
+    theme_vignette() +
+    labs(x="Cells per clone", 
+         y="# Clonal lineages")
+
+P1
+
+ggsave(paste0(folder, "Figures/0354_clone_size.png"), P1, bg = "white", width = 10, height = 6, dpi = 1000)
+
+```
+
+
+#### Germline Reconstruction and Subclone Definition
+###### This involves two main goals:
+
+###### Reconstruct the unmutated germline sequence for each observed BCR. This is the baseline against which we will measure somatic hypermutation.
+###### Define subclones by identifying groups of cells within a heavy-chain clone that share the same light chain.
+###### Reconstructing Germline Sequences (createGermlines)
+
+```{r, echo=FALSE}
+# Read in IMGT-gapped sequences
+
+# But : charger les séquences germinales de référence IMGT (V, D, J) depuis le dossier indiqué.
+# 
+# Résultat : un objet references qui contient les séquences germlines organisées par locus (IGH, IGK, IGL).
+# 
+# Utilité : ces germlines servent de référence pour reconstruire les séquences germinales complètes des clones.
+
+# references = readIMGT(dir = "~/share/germlines/imgt/human/vdj")
+load("C:/Users/209352/Downloads/references.RDATA")
+```
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+results_db_0354_hf <- createGermlines(results_db_0354_hf, 
+                              reference = references)
+
+# Data cleaning: Some downstream functions do not tolerate NA values in columns
+results_db_0354_hf$c_call[is.na(results_db_0354_hf$c_call)] <- "NA"  
+
+saveRDS(results_db_0354_hf, paste0(folder, "Files/results_db_0354_hf_24_03_2026.rds"))
+
+# On commence par charger les germlines IMGT avec readIMGT. Ensuite, createGermlines enrichit notre base clonale en reconstruisant les séquences germinales complètes, ce qui est essentiel pour calculer les mutations. Enfin, on remplace les valeurs manquantes dans c_call par "NA", car certaines fonctions downstream ne tolèrent pas les NA. Cela garantit que notre base est propre et exploitable pour les analyses suivantes.
+
+```
+
+
+####Defining Subclones by Light Chain (resolveLightChains)
+######A key advantage of single-cell data is having paired heavy and light chain information. While we defined our clones using only the heavy chain, cells within that clone may use different light chains. These represent distinct “subclones.” The resolveLightChains function from scoper identifies these groupings.
+
+
+```{r, echo= FALSE, fig.width = 15, fig.height=7}
+# Split clones into subclones by light chain
+# resolveLightChains() prend des clones définis par la chaîne lourde et les subdivise en sous‑clones selon la chaîne légère. Cela permet de capturer une granularité supplémentaire dans la définition clonale, propre aux données single‑cell.
+# Les clones sont généralement définis uniquement à partir de la chaîne lourde (car portant la majorité de la diversité clonale).
+# 
+# Mais à l’intérieur d’un même clone lourd, les cellules peuvent utiliser différentes chaînes légères.
+# 
+# Ces différences de chaînes légères représentent des sous‑clones biologiquement distincts.
+results_db_0354_hf <- readRDS(paste0(folder, "Files/results_db_0354_hf_24_03_2026.rds"))
+subclones_db_0354_hf <- resolveLightChains(data=results_db_0354_hf,
+                                   cell = "cell_id_unique", 
+                                   id = "sequence_id", 
+                                   nproc = 1)
+
+# General Clean Up
+subclones_db_0354_hf$v_gene <- str_split(subclones_db_0354_hf$v_call, "[*]", simplify = TRUE)[,1]
+subclones_db_0354_hf$j_gene <- str_split(subclones_db_0354_hf$j_call, "[*]", simplify = TRUE)[,1]
+subclones_db_0354_hf$c_gene <- str_split(subclones_db_0354_hf$c_call, "[*]", simplify = TRUE)[,1]
+subclones_db_0354_hf <- subclones_db_0354_hf %>%
+  mutate(chain = ifelse(locus == "IGH", "heavy", "light"))
+
+
+p3 <- subclones_db_0354_hf %>% 
+  group_by(sample_id, chain, c_gene) %>% 
+  tally() %>%
+  ggplot(aes(x=sample_id, y=n)) +
+  geom_bar(aes(fill=factor(c_gene)), 
+           stat="identity", position="stack", color = "black", lwd = 0.25) +
+  facet_wrap(~chain) +
+  scale_fill_viridis(option = "B", discrete = TRUE, name="Isotype") + 
+  labs(x="Subject", y="# BCRs") +
+  theme(axis.text.x= element_text(size = 15, angle = 40, hjust = 1, color = "black")) 
+  # theme_vignette()
+
+p3
+
+
+ggsave(paste0(folder, "Figures/0354_isotype_distribution.png"), p3, bg = "white", width = 12, height = 7.5, dpi = 1000)
+```
+
+
+
+
+```{r, echo= FALSE, fig.width = 15, fig.height=7}
+# Identifier les cellules avec IGK ET IGL dans la même cellule
+dual_kl_cells <- bcr_db_0354 %>%
+  filter(locus %in% c("IGK", "IGL")) %>%
+  group_by(cell_id_unique) %>%
+  summarise(
+    has_IGK = any(locus == "IGK"),
+    has_IGL = any(locus == "IGL"),
+    n_contigs = n(),
+    .groups = "drop"
+  ) %>%
+  filter(has_IGK & has_IGL)  # IGK ET IGL présentes
+
+print(paste("Cellules avec IGK + IGL :", nrow(dual_kl_cells)))
+print(dual_kl_cells)
+
+# Détails complets de ces cellules
+dual_details <- bcr_db_0354 %>%
+  filter(cell_id_unique %in% dual_kl_cells$cell_id_unique) %>%
+  arrange(cell_id_unique, locus) %>%
+  select(sample_id, cell_id_unique, locus, v_call, j_call, junction, productive)
+
+print("Contenu des cellules IGK+IGL :")
+print(dual_details)
+
+# Vérifier ce qui s'est passé avec les clones "perdus"
+
+clones_perdus <- setdiff(results_db_0354_split$clone_id, subclones_db_0354_hf$clone_id)
+# 1) Dans split_light=TRUE (gardés)
+perdus_split <- results_db_0354_split %>%
+  filter(clone_id %in% clones_perdus) %>%
+  count(locus) %>%
+  mutate(method = "split_light=TRUE")
+
+print("Composition des clones perdus (split_light=TRUE) :")
+print(perdus_split)
+
+# 2) Pourquoi exclus par resolveLightChains ?
+bcr_clones_perdus <- results_db_0354_split %>%
+  filter(clone_id %in% clones_perdus) %>%
+  group_by(cell_id_unique) %>%
+  summarise(
+    n_heavy = sum(locus == "IGH"),
+    n_light = sum(locus %in% c("IGK", "IGL")),
+    light_types = paste(sort(unique(locus[locus %in% c("IGK", "IGL")])), collapse = "+"),
+    .groups = "drop"
+  )
+
+print("Problèmes détectés dans ces clones :")
+table(bcr_clones_perdus$n_heavy, bcr_clones_perdus$n_light)
+print(table(bcr_clones_perdus$light_types))
+
+
+# Identifier les clones multi-sample
+clones_multi_sample <- subclones_db_0354_hf %>%
+  filter(locus == "IGH") %>%
+  group_by(clone_id) %>%
+  summarise(n_samples = n_distinct(sample_id), .groups = "drop") %>%
+  filter(n_samples > 1)
+
+print("Clones présents dans plusieurs samples :")
+print(clones_multi_sample)
+
+# Détails des cellules concernées
+if(nrow(clones_multi_sample) > 0) {
+  multi_sample_cells <- subclones_db_0354_hf %>%
+    filter(locus == "IGH", clone_id %in% clones_multi_sample$clone_id) %>%
+    arrange(clone_id, sample_id) %>%
+    select(sample_id, cell_id_unique, clone_id, clone_subgroup_id)
+  print(multi_sample_cells)
+}
+
+```
+
+### Preparing Data for Lineage Tree Analysis
+##### The ultimate goal of many BCR repertoire analyses is to reconstruct the evolutionary history of each B cell clone. This is done by building phylogenetic trees that trace the path of somatic hypermutation from the unmutated germline ancestor to the observed, mature B cells.
+
+##### The dowser package is used for this phylogenetic analysis, but it requires the data to be in a specific format: a ScoperClones object. This step uses the formatClones function to perform some final data cleaning and to create this specialized object.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Remove any rows where junction_length is NA, as this is a critical field.
+subclones_db_0354_hf <- filter(subclones_db_0354_hf, !is.na(junction_length))
+
+# Replace NA values in key annotation columns with the string "NA".
+subclones_db_0354_hf$c_gene[is.na(subclones_db_0354_hf$c_gene)] <- "NA"
+subclones_db_0354_hf$v_gene[is.na(subclones_db_0354_hf$v_gene)] <- "NA"
+subclones_db_0354_hf$j_gene[is.na(subclones_db_0354_hf$j_gene)] <- "NA"
+subclones_db_0354_hf$vj_gene[is.na(subclones_db_0354_hf$vj_gene)] <- "NA"
+
+#vec <- str_split(subclones_db$cell_id_unique, "_", simplify = TRUE)[,3]
+subclones_db_0354_hf <- subclones_db_0354_hf %>%
+  mutate(
+    timepoint = case_when(
+      sample_id == "Naive"   ~ "D0",
+      sample_id == "BMZ"     ~ "D0",
+       sample_id == "Memory"   ~ "D0",
+      sample_id == "Spikepos"     ~ "D0",
+      sample_id == "Sanofi_CTVpos"   ~ "D7",
+      sample_id == "Sanofi_CTVneg"  ~ "D7",
+      sample_id == "Novavax_CTVpos"  ~ "D7",
+      sample_id == "Novavax_CTVneg"  ~ "D7",
+      sample_id == "CD40cov2_CTVneg" ~ "D7",
+      sample_id == "CD40cov2_CTVpos" ~ "D7",
+      TRUE ~ sample_id   # au cas où
+    )
+  )
+
+
+subclones_db_0354_hf$sample_id <- as.character(subclones_db_0354_hf$sample_id)
+
+# L'appel à formatClones() prend la base clonale enrichie (subclones_db), définit les clones par Heavy+Light chain, ajoute les traits et colonnes d’intérêt, filtre les clones avec ≥2 séquences, et retourne une table clonale propre (clones_hl) prête pour les analyses downstream (phylogenie).
+
+clones_hl <- formatClones(subclones_db_0354_hf,
+                          cell = 'cell_id_unique',
+                          chain = "HL", 
+                          split_light = FALSE,
+                          traits = c("subject_id", "c_gene"),
+                          columns = c("c_gene", "v_gene", "j_gene", "vj_gene", "subject_id", "timepoint"),
+                          minseq = 2, 
+                          verbose = FALSE)
+```
+
+```{r, echo=FALSE}
+
+save(subclones_db_0354_hf,file = paste0(folder, "Files/subclones_db_0354_hf_24_03_2026.RDATA"))
+load(paste0(folder, "Files/subclones_db_0354_hf_24_03_2026.RDATA"))
+```
+
+
+#### Compute SHM
+```{r, echo=FALSE}
+# Detailed Mutation Counts by Region
+shm_db_0354 <- observedMutations(subclones_db_0354_hf,
+                            sequenceColumn = "sequence_alignment",
+                            germlineColumn = "germline_alignment_d_mask",
+                            regionDefinition = IMGT_VDJ_BY_REGIONS, # IMGT_VDJ_BY_REGIONS pour calculer les shm par region
+                            frequency = FALSE, # → on compte des nombres, pas des fréquences
+                            combine = FALSE, # → une colonne par région / type de mutation
+                            nproc = 2)
+
+
+
+# Total Mutation Count (Combined VDJ regions)
+shm_db_0354 <- observedMutations(shm_db_0354,
+                            sequenceColumn = "sequence_alignment",
+                            germlineColumn = "germline_alignment_d_mask",
+                            regionDefinition = IMGT_VDJ_BY_REGIONS,
+                            frequency = FALSE,
+                            combine = TRUE, # → combine toutes les régions définies
+                            nproc = 2)
+#mu_count : nombre total de mutations (R + S, toutes régions combinées).
+
+
+# Detailed Mutation Frequency by Region
+shm_db_0354 <- observedMutations(shm_db_0354,
+                            sequenceColumn = "sequence_alignment",
+                            germlineColumn = "germline_alignment_d_mask",
+                            regionDefinition = IMGT_VDJ_BY_REGIONS,
+                            frequency = TRUE,   # → on calcule des fréquences
+                            combine = FALSE,    # → par région
+                            nproc = 2)
+
+# Total Mutation Frequency (Combined VDJ regions)
+shm_db_0354 <- observedMutations(shm_db_0354,
+                            sequenceColumn = "sequence_alignment",
+                            germlineColumn = "germline_alignment_d_mask",
+                            regionDefinition = IMGT_VDJ_BY_REGIONS,
+                            frequency = TRUE,  # → on calcule des fréquences
+                            combine = TRUE,    # → toutes régions combinées
+                            nproc = 2)
+
+#mu_freq : fréquence totale des mutations (R + S, toutes régions définies dans IMGT_VDJ combinées), calculée 
+```
+
+#### Visualizing Replacement and Silent Mutations in CDRs
+##### A key way to infer positive or negative selection is to compare the rate of replacement (R) mutations (which change the amino acid sequence) to silent (S) mutations (which do not). High levels of R mutations in the antigen-binding CDRs are a classic sign of positive selection for improved binding.
+
+```{r, echo =FALSE, fig.width= 12, fig.height= 7}
+
+shm_db_0354$sample_id  <- factor(shm_db_0354$sample_id, 
+                             levels = c("Naive", "BMZ", "Memory", "Spikepos" ,"Novavax_CTVpos", "Novavax_CTVneg", "Sanofi_CTVpos","Sanofi_CTVneg", "CD40cov2_CTVpos","CD40cov2_CTVneg"))
+
+
+# Clean up isotype calls for plotting
+shm_db_0354$c_call <- str_split(shm_db_0354$c_call, "[*]", simplify = TRUE)[,1]
+isotypes = c( "IGHD", "IGHM", "IGHG1", "IGHG2", "IGHG3", "IGHG4","IGHA1", "IGHA2", "IGHE")
+shm_db_0354$c_call <- factor(shm_db_0354$c_call, levels = isotypes)
+# Plot silent mutation frequency in the CDRs
+p5 <- shm_db_0354 %>%
+  filter(locus == "IGH" & c_call != "NA") %>%
+  ggplot(aes(x = sample_id, y=mu_freq, fill=c_call)) +
+          geom_boxplot(outlier.alpha = 0) + 
+          labs(title = "V mutations frequency", 
+               x = "Isotype", y = "Mutation frequency") +
+          scale_fill_viridis(option = "B", discrete = TRUE) +
+          facet_grid(.~c_call, scales="free_y") + 
+     theme_vignette() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))  + 
+  guides(fill = "none") 
+
+p5
+
+ggsave(paste0(folder, "Figures/0354_V-mutations_by_isotype.png"), p5, bg = "white", width = 12, height =7, dpi = 1000)
+
+```
+```{r,  echo =FALSE, fig.width= 12, fig.height= 7}
+# Plot replacement mutation frequency in the CDRs
+p6 <- shm_db_0354 %>%
+  filter(locus == "IGH" & c_call != "NA") %>%
+  ggplot(aes(x = sample_id, y=mu_freq_cdr3_r, fill=c_call)) +
+          geom_boxplot(outlier.alpha = 0) + 
+          labs(title = "CDR3 replacement mutations", 
+               x = "Isotype", y = "Mutation frequency") +
+          scale_fill_viridis(option = "B", discrete = TRUE) +
+          facet_grid(.~c_call, scales="free_y") + 
+     theme_vignette() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))  +
+  guides(fill = "none")
+p6
+
+ggsave(paste0(folder, "Figures/0354_CDR3-replacements-mutations_by_isotype.png"), p6, bg = "white", width = 12, height =7, dpi = 1000)
+
+
+```
+
+
+```{r,  echo =FALSE, fig.width=10, fig.height=4.8, warning=FALSE}
+# First, calculate the mean mutation frequency for each clone
+mut_freq_clone <- shm_db_0354 %>%
+  filter(locus == "IGH") %>%
+  group_by(clone_id, sample_id, c_call) %>%
+  summarise(mean_mut_freq = mean(mu_freq))
+
+# Order isotypes for consistent plotting
+isotypes = c( "IGHD", "IGHM", "IGHG1", "IGHG2", "IGHG3", "IGHG4","IGHA1", "IGHA2", "IGHE")
+mut_freq_clone$c_call <- factor(mut_freq_clone$c_call, levels=isotypes)
+
+# Create a density plot of mutation frequencies
+ggplot(mut_freq_clone %>% filter(c_call != "NA"), 
+       aes(mean_mut_freq, fill = c_call)) +
+  geom_density(alpha=0.5) +
+  facet_grid(c_call~sample_id, scales="free") +
+  scale_fill_viridis(option = "B", discrete = TRUE) + 
+  labs(x="Mean mutation frequency per clone", y="Density",
+       title="Somatic Hypermutation Rate by Isotype and Condition", 
+       fill = "Isotype") +
+  theme_vignette(base_size = 8) + 
+  guides(fill = "none")
+```
+
+
+```{r,  echo =FALSE, fig.height= 8, fig.width= 14}
+
+shm_db_0354$junction_aa_length <- nchar(shm_db_0354$junction_aa)
+
+
+tt <- shm_db_0354 %>% 
+  filter(!is.na(c_call), c_call != "", 
+         !is.na(v_gene), v_gene != "", 
+         locus =="IGH") %>% 
+  group_by(clone_id, v_gene, c_gene, sample_id, junction_aa_length) %>% 
+  #summarise( median.mut = median(mu_freq_cdr3_r, na.rm = TRUE) * 100, 
+  summarise( median.mut = median(mu_freq, na.rm = TRUE) * 100, 
+             seq_count = n(), .groups = "drop" ) 
+
+condition.order <- c("Naive", "BMZ", "Memory", "Spikepos" ,"Novavax_CTVpos", "Novavax_CTVneg", "Sanofi_CTVpos","Sanofi_CTVneg", "CD40Cov2_CTVpos","CD40Cov2_CTVneg")
+
+ 
+
+Figure.1 <- ggplot(tt %>% filter(c_gene != "IGHE", seq_count <=250), aes(x = v_gene, y = junction_aa_length, color = median.mut)) +
+geom_point(aes(size = seq_count)) +
+labs(
+  #title = "Frequency of CDR3 replacement mutations",
+  title = "Frequency of VH mutations",
+     x = "IGHV genes", y = "CDR3 length (AA)", 
+  #color= "Median CD3 replacement SHM %",
+     color= "Median VH SHM %",
+     size = "# cells par clone") +
+theme_classic() +
+facet_grid(factor(sample_id, levels = condition.order)~factor(c_gene, levels = c("IGHD", "IGHM","IGHG1", "IGHG2", "IGHG3", "IGHG4",  "IGHA1", "IGHA2"))) +
+scale_color_gradientn(colours = c("green", "white", "magenta", "#6f0795"),
+values = scales::rescale(c(0, 10, 20, 30)),
+limits = c(0, 25)) +
+scale_size(breaks=c(2,20, 50,80,120, 170), range = c(1,15)) +
+theme(panel.background = element_rect(fill = 'black'),
+legend.background = element_rect(fill = "white", color = NA),
+legend.key = element_rect(color = "white", fill = "white"),
+axis.text.x = element_blank(),
+axis.ticks.x = element_blank(),
+axis.text.y = element_text(color = "black",size = 15, face = "bold"),
+axis.title = element_text(size = 15),
+legend.text = element_text(size=15),
+strip.text.x = element_text(face = "bold", size=15), # <-- met les isotypes en gras
+strip.text.y = element_text(face = "bold", size=15) )
+Figure.1
+#ggsave(paste0(folder, "Figures/0354_OVERVIEW_CDR3-replacements-mutations.png"), Figure.1, bg = "white", width = 18, height =14, dpi = 1000)
+ ggsave(paste0(folder, "Figures/0354_OVERVIEW_VH-mutations.png"), Figure.1, bg = "white", width = 18, height =14, dpi = 1000)
+
+
+```
+```{r, echo=FALSE}
+shm_db_0354 <- shm_db_0354 %>%
+  mutate(
+    #sample_id      = gsub("CD40cov2", "CD40Cov2", sample_id),
+    sample_id = gsub("Spikepospospos", "Spikepos", sample_id),
+    # cell_id_unique = gsub("CD40cov2", "CD40Cov2", cell_id_unique),
+    #  cell_id_unique = gsub("Spikepo", "Spikepos", cell_id_unique),
+  )
+
+
+saveRDS(shm_db_0354,paste0(folder, "Files/shm_db_0354_24_03_2026.rds"))
+shm_db_0354 <- readRDS(paste0(folder, "Files/shm_db_0354_24_03_2026.rds"))
+```
+```{r, echo=FALSE, fig.height= 8, fig.width= 14}
+top100_clones_data <- shm_db_0354 %>% filter(chain=="heavy") %>%
+  group_by(clone_id) %>%
+  summarise(
+    n_cells = n(),
+    mean_mu_freq = mean(mu_freq, na.rm = TRUE),
+    median_mu_freq = median(mu_freq, na.rm = TRUE),
+    v_genes = paste(unique(v_gene), collapse = "; "),
+    j_genes = paste(unique(j_gene), collapse = "; "),
+    sample = paste(unique(sample_id), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_cells)) %>%
+  slice_head(n = 100)
+
+#toP10_clones_data
+
+# 1. Récupérer les clone_id des top 100
+top100_clone_ids <- top100_clones_data$clone_id
+
+# 2. Ajouter la longueur CDR3 AA à shm_db_0354 (si pas déjà fait)
+#shm_db_0354$junction_aa_length <- nchar(shm_db_0354$junction_aa)
+
+# 3. Refaire tt mais SEULEMENT sur les top 100 clones
+tt_top100 <- shm_db_0354 %>% 
+  filter(!is.na(c_call), c_call != "", 
+         !is.na(v_gene), v_gene != "", 
+         locus == "IGH",
+         clone_id %in% top100_clone_ids) %>%  # < filtre top 100 clones
+  group_by(clone_id, v_gene, c_gene, sample_id, junction_aa_length) %>% 
+  summarise(median.mut = median(mu_freq, na.rm = TRUE) * 100, 
+            seq_count = n(), .groups = "drop")
+
+# 4. Le reste identique, mais sur tt_top100
+Figure.1_top100 <- ggplot(tt_top100 %>% filter(c_gene != "IGHE", seq_count <=250), 
+                          aes(x = v_gene, y = junction_aa_length, color = median.mut)) +
+  geom_point(aes(size = seq_count)) +
+  labs(#title = "Top 100 clones - Frequency of CDR3 replacement mutations", 
+    title = "Top 100 clones - Frequency of VH mutations", 
+       x = "IGHV genes", 
+       y = "CDR3 length (AA)", 
+        #color = "Median CDR3 replacement SHM %", 
+    color = "Median VH SHM %",
+       size = "# cells par clone") +
+  theme_classic() +
+  facet_grid(factor(sample_id, levels = condition.order) ~ 
+               factor(c_gene, levels = c("IGHD", "IGHM", "IGHG1", "IGHG2", "IGHG3", "IGHG4", "IGHA1", "IGHA2"))) +
+  scale_color_gradientn(colours = c("green", "white", "magenta", "#6f0795"),
+                        values = scales::rescale(c(0, 10, 20)),
+                        limits = c(0, 20)) +
+  scale_size(breaks = c(2, 20, 50, 80, 120, 170, 1000), range = c(1, 15)) +
+  theme(panel.background = element_rect(fill = 'black'),
+        legend.background = element_rect(fill = "white", color = NA),
+        legend.key = element_rect(color = "white", fill = "white"),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(color = "black", size = 15, face = "bold"),
+        axis.title = element_text(size = 15),
+        legend.text = element_text(size = 15),
+        strip.text.x = element_text(face = "bold", size = 15),
+        strip.text.y = element_text(face = "bold", size = 15))
+
+Figure.1_top100
+
+# ggsave(paste0(folder, "Figures/0354_OVERVIEW_CDR3-replacements-mutations_top100.png"),
+#        Figure.1_top100, bg = "white", width = 18, height = 14, dpi = 1000)
+ggsave(paste0(folder, "Figures/0354_OVERVIEW_VH-mutations_top100.png"),
+        Figure.1_top100, bg = "white", width = 18, height = 14, dpi = 1000)
+```
+
+```{r, echo=FALSE, fig.height= 5, fig.width= 12}
+set.seed("1234")
+samples_0354 <- unique(shm_db_0354$sample_id)
+
+shm_list_0354 <- lapply(samples_0354, function(s) {
+  subset(shm_db_0354, sample_id == s)
+})
+names(shm_list_0354) <- samples_0354
+
+p7 <- clonalCompare(
+  shm_list_0354,
+  top.clones = 10,
+  #highlight.clones = top100_clones_data$clone_id,
+  samples =  condition.order,
+  cloneCall = "clone_id",  # utilise ta colonne clone_id
+  graph = "alluvial"
+) +  theme(axis.text.x = element_text(angle = 45,  hjust=1)) 
+p7
+ggsave(paste0(folder, "Figures/0354_clonal_track.png"), 
+       p7, bg = "white", width = 12, height = 7, dpi = 1200)
+
+```
+```{r, echo=FALSE, fig.height= 5, fig.width= 6}
+##### JE suis ICI
+
+subset_shm_db_0354 = subset(shm_db_0354, sample_id %in% c("Spikepos","Novavax_CTVneg", "Sanofi_CTVneg", "CD40Cov2_CTVneg"))
+samples_0354 <- unique(subset_shm_db_0354$sample_id)
+
+shm_list_0354 <- lapply(samples_0354, function(s) {
+  subset(subset_shm_db_0354, sample_id == s)
+})
+
+names(shm_list_0354) <- samples_0354
+
+p7 <- clonalCompare(
+  shm_list_0354,
+  top.clones = 30,
+  #highlight.clones = top100_clones_data$clone_id,
+  order.by =  c("Spikepos","Novavax_CTVneg", "Sanofi_CTVneg", "CD40Cov2_CTVneg"),
+  cloneCall = "clone_id",  # utilise ta colonne clone_id
+  graph = "alluvial",
+  proportion = F
+ # highlight.clones = "1075"
+) +  theme(axis.text.x = element_text(angle = 45,  hjust=1))
+
+p7
+
+ggsave(paste0(folder, "Figures/0354_clonal_track_subset_spike_Nova_Sano_COV2L.png"), 
+       p7, bg = "white", width =8 , height = 5, dpi = 1200)
+```
+
+
+```{r, echo=FALSE, fig.height= 5, fig.width= 6}
+# Extraire clones par sample
+clones_spike <- unique(subset_shm_db_0354$clone_id[subset_shm_db_0354$sample_id == "Spikepos"])
+clones_Novavax <- unique(subset_shm_db_0354$clone_id[subset_shm_db_0354$sample_id == "Novavax_CTVneg"])
+clones_Sanofi <- unique(subset_shm_db_0354$clone_id[subset_shm_db_0354$sample_id == "Sanofi_CTVneg"])
+clones_cd40 <- unique(subset_shm_db_0354$clone_id[subset_shm_db_0354$sample_id == "CD40Cov2_CTVneg"])
+
+# Clones communs (publics)
+clones_common <- intersect(clones_spike, clones_cd40, clones_Novavax, clones_Sanofi)
+print(paste("Clones communs :", length(clones_common)))
+
+# Top 10 communs les plus expandus
+common_sizes <- subset_shm_db_0354 %>%
+  filter(clone_id %in% clones_common, locus == "IGH") %>%
+  count(clone_id, name = "total_size") %>%
+  arrange(desc(total_size))
+
+print("Top 10 clones publics :")
+
+print(head(common_sizes, 10))
+```
+
+
+```{r, echo=FALSE, fig.height= 5, fig.width= 6}
+# - CLONES PRÉSENTS DANS LA FIGURE --
+
+clones_plot <- unique(p7@data$clones)
+clones_plot
+# Ce sont les clones colorés dans la légende de la figure.
+
+
+# - IDENTIFIER CLONES COMMUNS & SPÉCIFIQUES 
+
+# Clones dans chaque échantillon
+clones_spike <- unique(subset_shm_db_0354$clone_id[
+  subset_shm_db_0354$sample_id == "Spikepos"
+])
+
+clones_cd40 <- unique(subset_shm_db_0354$clone_id[
+  subset_shm_db_0354$sample_id == "CD40cov2_CTVneg"
+])
+
+# Clones communs
+clones_communs <- intersect(clones_spike, clones_cd40)
+
+# Clones spécifiques CD40cov2_CTVneg
+clones_spec_cd40 <- setdiff(clones_cd40, clones_spike)
+
+# - EXTRAIRE CEUX QUI SONT TRACKÉS DANS LA FIGURE -
+
+clones_communs_tracked <- intersect(clones_communs, clones_plot)
+clones_spec_cd40_tracked <- intersect(clones_spec_cd40, clones_plot)
+
+# - Résumé 
+
+list(
+  clones_plot = clones_plot,
+  clones_communs_tracked = clones_communs_tracked,
+  clones_spec_cd40_tracked = clones_spec_cd40_tracked
+)
+
+
+### 2. Construire une table
+
+
+### 1) Table des tailles de clones (unique)
+clone_sizes <- shm_db_0354 %>%
+  group_by(clone_id) %>%
+  summarise(clone_size = n_distinct(cell_id_unique))
+
+
+### 2) Table des infos des clones (unique clone_id  V/J)
+# On sélectionne 1 ligne par clone_id
+clone_info <- shm_db_0354 %>%
+  select(clone_id, v_gene, j_gene) %>%
+  distinct(clone_id, .keep_all = TRUE)
+
+
+### 3) Fusion propre (clone_size + V/J)
+clones_table <- clone_info %>%
+  left_join(clone_sizes, by = "clone_id") %>%
+  filter(clone_id %in% clones_plot) %>%                 # seulement ceux visibles dans la figure
+  mutate(
+    in_Spike = clone_id %in% clones_spike,
+    in_CD40 = clone_id %in% clones_cd40,
+    status = case_when(
+      in_Spike & in_CD40 ~ "Commun",
+      !in_Spike & in_CD40 ~ "Specifique_CD40",
+      in_Spike & !in_CD40 ~ "Specifique_Spike",
+      TRUE ~ "Autre"
+    ),
+    tracked_in_figure = clone_id %in% clones_plot
+  ) %>%
+  arrange(desc(clone_size))
+
+clones_table
+
+
+
+### 3. Sauvegarde TSV
+
+# Tous les clones visibles dans la figure
+write.table(clones_table,
+            file = paste0(folder, "Files/all_clones_spike_CD40_neg.tsv"),
+            sep = "\t", quote = FALSE, row.names = FALSE)
+
+# Clones communs visibles
+write.table(
+  clones_table %>% filter(status == "Commun"),
+  file = paste0(folder, "Files/clones_communs_tracked_spike_CD20_neg.tsv"),
+  sep = "\t", quote = FALSE, row.names = FALSE
+)
+
+# Clones spécifiques CD40 visibles
+write.table(
+  clones_table %>% filter(status == "Specifique_CD40"),
+  file = paste0(folder, "Files/clones_spec_cd40_tracked.tsv"),
+  sep = "\t", quote = FALSE, row.names = FALSE
+)
+```
+
+
+###  Interaction with Single-Cell Object
+##### Merging Immcantation Data into the Seurat Object
+```{r, echo=FALSE, fig.height= 5, fig.width= 6}
+
+load(paste0("C:/Users/209352/OneDrive - UPEC/SC_aCD40_BCR_vaccins/FRENCHCOVID/GEX_filtered_feature_bc_matrix.h5/0354/Files/Merge_P0354_Norm_25-03-2026.rdata"))
+
+
+# 1. Remplacer CD40Cov2 par CD40cov2 dans les colonnes importantes
+shm_db_0354 <- shm_db_0354 %>%
+  mutate(
+    sample_id      = gsub("CD40cov2", "CD40Cov2", sample_id),
+    cell_id_unique = gsub("CD40cov2", "CD40Cov2", cell_id_unique)
+  )
+
+shm_db_0354$subject_id <- "0354"
+
+#  Construire le data.frame Immcantation aligné sur cell_id_unique
+Immc.df <- shm_db_0354%>%
+  filter(chain == "heavy") %>%
+  select(
+    cell_id_unique,
+    clone_id,
+    subject_id,
+    sample_id,
+    new_mu_count = mu_count,
+    new_mu_freq  = mu_freq,
+    mu_count_cdr3_r,
+    mu_count_cdr3_s, 
+    mu_freq_cdr3_r,
+    mu_freq_cdr3_s
+  ) %>%
+  mutate(
+    clone_id = paste0(subject_id, "_", clone_id)
+  ) %>%
+  distinct(cell_id_unique, .keep_all = TRUE) %>%   # une ligne par cellule
+  column_to_rownames("cell_id_unique") %>%
+  as.data.frame()
+
+
+
+# . Vérifier l’overlap avec Seurat
+sum(rownames(Immc.df) %in% rownames(MergeP0354_Norm@meta.data))
+
+
+# Ajouter comme métadonnées
+MergeP0354_Norm <- AddMetaData(MergeP0354_Norm, Immc.df)
+```
+
+
+```{r, echo=FALSE, fig.height= 5, fig.width= 6}
+MergeP0354_Norm_combined <- MergeP0354_Norm
+save(MergeP0354_Norm_combined,file = paste0(folder, "Files/MergeP0354_Norm_combined_01_04_2026.RDATA"))
+```
+
+
+
+
+```{r, echo=FALSE}
+library(dplyr)
+library(ggplot2)
+cols_merge1 <-  c(
+  "Naive" = "#0047AB",
+  "BMZ" = "#FFC300",
+  "Spikepos" = "#C70039",
+  "Memory" = "#008000",
+  
+  "Novavax_CTVpos" = "yellow",
+  "Novavax_CTVneg" = "lightgreen",
+  "Sanofi_CTVpos" = "#FF4500",   # orange rouge (Sanofi pos)
+  "Sanofi_CTVneg" = "#DDA0DD",  
+  "CD40Cov2_CTVpos" = "purple",
+  "CD40Cov2_CTVneg" = "lightblue"
+)
+
+
+
+mutation_col <- "mu_freq"   # Change selon LE shm_db_0354
+
+#  1. Médiane par clone 
+df_clone_medians <- shm_db_0354 %>% filter(locus =="IGH") %>%
+  group_by(sample_id, clone_id) %>%
+  summarise(
+    mut_median = median(.data[[mutation_col]], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#  2. Violin Plot avec palette + jitter 
+violin_sample <- ggplot(df_clone_medians,
+       aes(x = factor(sample_id, levels = condition.order), y = mut_median*100, fill = sample_id)) +
+  
+  geom_violin(trim = FALSE, alpha = 0.9, color = "black") +
+  
+  geom_jitter(
+    aes(color = sample_id),
+    width = 0.15,
+    size = 1.2,
+    alpha = 0.8
+  ) +
+  
+  stat_summary(fun = median, geom = "point", size = 4, color = "black") +
+  
+  scale_fill_manual(values = cols_merge1) +
+  scale_color_manual(values = cols_merge1) +
+  
+  labs(
+    title = "VH median mutations per clone",
+    x = "Sample ID",
+    y = "Median mutation per clone"
+  ) +
+  
+  theme_bw(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10, face = "bold", color="black"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16)
+  )
+violin_sample
+ggsave(paste0(folder, "Figures/0354_mutations per clone per sample.png"), 
+       violin_sample, bg = "white", width =6 , height = 5, dpi = 1200)
+```
+
+
+#### Visualizing Clonal Distribution on the UMAP
+
+```{r, echo=FALSE, fig.height= 5, fig.width= 14}
+cols_merge <-  c(
+  "Naive" = "#0047AB",
+  "BMZ" = "#FFC300",
+  "Spikepos" = "#C70039",
+  "Memory" = "#008000",
+  
+  "Novavax_CTVpos" = "yellow",
+  "Novavax_CTVneg" = "lightgreen",
+  "Sanofi_CTVpos" = "#FF4500",   # orange rouge (Sanofi pos)
+  "Sanofi_CTVneg" = "#DDA0DD",  
+  "CD40Cov2_CTVpos" = "purple",
+  "CD40Cov2_CTVneg" = "lightblue"
+)
+plot0 <- DimPlot(subset(MergeP0354_Norm, subset = !is.na(sample_id)), reduction = "umap", group.by = "sample_id",  cols = cols_merge)
+
+#plot1 – Organisation transcriptionnelle globale
+plot1 <- DimPlot(
+  MergeP0354_Norm,
+  label = TRUE
+) +
+  guides(color = "none") + #supprime la légende de couleur (les numéros de clusters sont déjà écrits sur le plot).
+  theme_vignette(grid_lines = "no") # nettoie l’esthétique (fond clair, pas de lignes de grille) pour une lecture plus facile.
+# colore les cellules selon la fréquence de mutation calculée avec shazam (mu_freq renommé en new_mu_freq). 
+
+
+
+MergeP0354_Norm$new_mu_freq_pct <- MergeP0354_Norm@meta.data$new_mu_freq * 100
+
+# Même pour plot4
+ MergeP0354_Norm$new_mu_freq_cdr3_pct <- MergeP0354_Norm@meta.data$mu_freq_cdr3_r * 100
+
+
+# 1. Limites communes (min/max sur les 2 datasets)
+min_mut <- min(c(
+  min(MergeP0354_Norm$new_mu_freq_pct, na.rm = TRUE)
+), na.rm = TRUE)
+
+max_mut <- max(c(
+  max(MergeP0354_Norm$new_mu_freq_pct, na.rm = TRUE)
+), na.rm = TRUE)
+
+# 2. Plots avec mêmes limites
+plot3_ <- FeaturePlot(MergeP0354_Norm, features = "new_mu_freq_pct") +
+  scale_color_gradientn(
+    colors = c("#DCDCDC", "#FF6B6B", "#C8102E"),
+    na.value = "#DCDCDC",
+    limits = c(min_mut, max_mut),  # ← MÊMES LIMITES
+    name = "VH Mutation\nfrequency (%)"
+  ) +
+  theme(plot.title = element_blank(), legend.position = "right")
+
+
+
+
+# 1. Limites globales CDR3 (J0 + J7)
+min_cdr3 <- min(c(
+  min(MergeP0354_Norm$new_mu_freq_cdr3_pct, na.rm = TRUE)
+), na.rm = TRUE)
+
+max_cdr3 <- max(c(
+  max(MergeP0354_Norm$new_mu_freq_cdr3_pct, na.rm = TRUE)
+), na.rm = TRUE)
+
+print(paste("CDR3 Min:", round(min_cdr3, 2), "%"))
+print(paste("CDR3 Max:", round(max_cdr3, 2), "%"))
+
+# 2. Plots avec ÉCHELLES IDENTIQUES
+plot4_ <- FeaturePlot(MergeP0354_Norm, features = "new_mu_freq_cdr3_pct") +
+  scale_color_gradientn(
+    colors = c("#DCDCDC", "#FF6B6B", "#C8102E"),
+    na.value = "#DCDCDC",
+    limits = c(min_cdr3, max_cdr3),  # ← MÊMES LIMITES CDR3
+    name = "CDR3 R mut.\nfrequency (%)"
+  ) +
+  theme(plot.title = element_blank(), legend.position = "right")
+
+
+
+
+library(patchwork)
+p_all <- plot0 + plot1 + plot3_ + plot4_ + plot_layout(ncol = 4, nrow = 1)
+p_all
+ggsave(
+  paste0(folder, "Figures/0354_clonal_and_mutations_distribution_on_UMAP_23_03_2026.png"),
+  p_all,
+  bg = "white", width = 19, height = 5, dpi = 1200
+)
+
+```
+
+#### VH Somatic hypermutation frequency IN CLUSTERS
+
+```{r, echo=FALSE, fig.height= 5, fig.width= 6, warning=FALSE}
+
+
+vln1 <- VlnPlot(
+  MergeP0354_Norm,
+  features = "new_mu_freq_pct",     # ou mu_freq_cdr3_r
+  group.by = "seurat_clusters", # ident = clusters
+  #cols     = pal_clusters,
+  pt.size  = 0.1
+) + ggtitle("VH mutations") +
+  xlab("Seurat clusters")+
+  ylab("V mutation frequency") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+vln1
+ggsave(
+  paste0(folder, "Figures/0354_clusters_mutations_violin_23_03_2026.png"),
+  vln1,
+  bg = "white", width = 6, height = 5, dpi = 1200
+)
+```
+
+
+
+
+
+### Tracking expanded B cells : Spike+ and proliferating CD40COV2 B cells  
+
+```{r, echo=FALSE, fig.height= 5, fig.width= 10, warning=FALSE}
+# 1. Clones Spikepos
+spikepos_clones <- unique(MergeP0354_Norm$clone_id[
+  grepl("Spikepos", MergeP0354_Norm$sample_id)
+])
+
+# 2. Clones CD40Cov2_CTVneg
+cd40neg_clones <- unique(MergeP0354_Norm$clone_id[
+  grepl("CD40Cov2_CTVneg", MergeP0354_Norm$sample_id)
+])
+
+# 3. Clones partagés
+clone_id_common <- intersect(spikepos_clones, cd40neg_clones)
+print(paste("Clones communs Spikepos ↔ CD40Cov2_CTVneg :", length(clone_id_common)))
+
+# 4. CD40Cov2_CTVneg particules spécifiquement partagées
+cells_cd40neg_shared <- WhichCells(
+  MergeP0354_Norm,
+  expression = clone_id %in% clone_id_common & 
+    grepl("CD40Cov2_CTVneg", sample_id)
+)
+
+print(paste("Cellules CD40Cov2_CTVneg SPEC :", length(cells_cd40neg_shared)))
+
+# 5. Toutes les CD40Cov2_CTVneg (erreur corrigée)
+cells_cd40neg_all <- WhichCells(
+  MergeP0354_Norm,
+  cells = rownames(MergeP0354_Norm@meta.data)[
+    grepl("CD40Cov2_CTVneg", MergeP0354_Norm@meta.data$sample_id)
+  ]
+)
+print(paste("Total CD40Cov2_CTVneg :", length(cells_cd40neg_all)))
+
+# 6. Définir les catégories pour l'affichage
+MergeP0354_Norm$highlight2 <- "other"
+MergeP0354_Norm$highlight2[cells_cd40neg_all] <- "CD40Cov2_CTVneg"
+MergeP0354_Norm$highlight2[cells_cd40neg_shared] <- "spec_CD40cov2"  # overwrite
+
+
+
+
+
+
+# 7. Plot
+viz_cd40_heat <- DimPlot(
+  MergeP0354_Norm,
+  group.by = "highlight2",
+  cols = c(
+    "other" = "lightgrey",
+    "CD40Cov2_CTVneg" = "lightblue",
+   "spec_CD40cov2" ="#C70039"
+  ),
+  pt.size = 0.3
+) +
+  
+  geom_point(
+    data = MergeP0354_Norm@reductions$umap@cell.embeddings[cells_cd40neg_shared, ] %>% 
+      as.data.frame() %>% 
+      mutate(is_highlight = "spec_CD40cov2"),
+    aes(umap_1, umap_2),
+    color = "#C70039",
+    shape = 8,          # ⭐ étoile
+    size = 2
+  )  +
+  labs(title = "CD40Cov2_CTVneg highlight (shared vs non-shared clones)")
+
+print(viz_cd40_heat)
+
+ggsave(
+  paste0(folder, "Figures/P0354_CD40neg_shared_vs_nonshared.png"),
+  viz_cd40_heat,
+  bg = "white", width = 8, height = 6, dpi = 1200)
+  
+  
+  
+  
+```
+
+
+```{r, echo=FALSE, fig.height= 5, fig.width= 10, warning=FALSE}
+# 1. Identifier les clones communs présents dans Spikepos ET CD40cov2_CTVneg
+spikepos_clones <- unique(MergeP0354_Norm$clone_id[grepl("Spikepos", MergeP0354_Norm$sample_id)])
+cd40neg_clones <- unique(MergeP0354_Norm$clone_id[grepl("CD40Cov2_CTVneg", MergeP0354_Norm$sample_id)])
+
+# Clones partagés
+clone_id_common_spike_cd40 <- intersect(spikepos_clones, cd40neg_clones)
+print(paste("Clones communs Spikepos ↔ CD40Cov2_CTVneg:", length(clone_id_common_spike_cd40)))
+
+# 2. Cellules CD40cov2_CTVneg qui portent ces clones communs
+cells_cd40neg_shared <- WhichCells(MergeP0354_Norm, 
+                                   expression = clone_id %in% clone_id_common_spike_cd40 & 
+                                     grepl("CD40Cov2_CTVneg", sample_id))
+
+print(paste("Cellules CD40cov2_CTVneg avec clones Spikepos:", length(cells_cd40neg_shared)))
+
+# 3. Créer le highlight
+MergeP0354_Norm$is_highlight <- "other"
+MergeP0354_Norm$is_highlight[cells_cd40neg_shared] <- "shared_Spike_CD40neg"
+
+# 4. Visualisation
+viz_cd40_shared <- DimPlot(
+  MergeP0354_Norm,
+  group.by = "is_highlight",
+  cols = c("other" = "lightgrey", "shared_Spike_CD40neg" = "#9370DB"),  # violet
+  pt.size = 0.3
+) +
+  geom_point(
+    data = Embeddings(MergeP0354_Norm, "umap")[cells_cd40neg_shared, ] %>%
+      as.data.frame() %>%
+      mutate(highlight = "shared_Spike_CD40neg"),
+    aes(umap_1, umap_2),
+    color = "#9370DB",  # violet pour CD40cov2_CTVneg partagés
+    shape = 8,          # ⭐ étoile
+    size = 2
+  ) +
+  labs(title = "CD40cov2_CTVneg cellules avec clones Spikepos")
+
+print(viz_cd40_shared)
+
+ggsave(
+  paste0(folder, "Figures/P0354_CD40neg_Spikepos_shared_clones.png"),
+  viz_cd40_shared,
+  bg = "white", width = 8, height = 6, dpi = 1200
+)
+```
+
+
+
+
+
+
+
+```{r, echo=FALSE, fig.height= 6, fig.width= 14}
+Figure.5<-shm_db_0354 %>%
+            filter(!is.na(c_call), c_call!="IGHGP", c_call!="IGHE") %>% 
+         ggplot(aes(x=factor(sample_id, levels = condition.order), y=mu_freq_cdr3_r  *100, fill=factor(sample_id, levels = condition.order))) +
+  geom_boxplot()+
+  facet_grid(.~factor(c_call, levels = isotypes))+
+  labs(x="Condition", y="Unique VDJ sequence", fill="Condition" , title = "CDR3 replacement mutations")+
+  scale_fill_manual(values=cols_merge1)+
+  
+  
+  theme_classic()+
+  theme(axis.text.x= element_text(size = 15, angle = 90, hjust = 1, color = "black"), axis.text.y= element_text(size = 15,color = "black"), 
+        axis.title = element_text(size = 15),
+        legend.text = element_text(size=15), legend.title = element_text(size=15),
+        strip.text.y = element_text(size = 15, face="bold"), strip.background = element_rect(linetype="solid"),
+        strip.text.x  = element_text(size = 15, face = "bold"),plot.title = element_text(size=18, face="bold"))
+
+Figure.5
+
+ggsave(paste0(folder, "Figures/BOxplot_all_CDR3 replacement mutations.png"), 
+       Figure.5, bg = "white", width = 17, height = 8, dpi = 1200)
+```
+
+
+
+
+
+##### RICHNESS AND DIVERSITY
+
+```{r, echo=FALSE, fig.height= 4, fig.width= 6, warning=FALSE, message=FALSE}
+condition.order <- c(
+
+  "Naive",
+    "BMZ",
+  "Memory",
+   "Spikepos",
+   "Novavax_CTVpos",
+  "Novavax_CTVneg",
+   "Sanofi_CTVpos",
+  "Sanofi_CTVneg",
+
+  "CD40Cov2_CTVpos",
+    "CD40Cov2_CTVneg"
+
+ 
+)
+
+MergeP0354_Norm$sample_id <- factor(
+  MergeP0354_Norm$sample_id,
+  levels = condition.order
+)
+plott <- clonalQuant(subset(MergeP0354_Norm, subset = !is.na(sample_id)), 
+                     group.by = "sample_id",
+                     cloneCall="clone_id")
+
+plott <- plott + 
+  scale_color_manual(values = cols_merge, name = "Condition") +
+  scale_fill_manual(values = cols_merge,  name = "Condition") + 
+  theme(axis.text.x= element_text(size = 12, angle = 45, hjust = 1, color = "black"))
+
+plott 
+ggsave(paste0(folder, "Figures/0354_cloneCOUNT_24_03_2026.png"), 
+       plott, bg = "white", width = 6, height = 4, dpi = 1200)
+```
+```{r, echo=FALSE, fig.height= , fig.width= 5, message=FALSE, warning=FALSE}
+
+#Pour chaque groupe, on regarde la distribution des clone_id et on calcule l’indice de Shannon sur cette distribution 
+#(plus l’indice est élevé, plus la répartition entre clones est équilibrée).
+
+#CD40cov2_CTVneg (noir) a la diversité la plus basse : indice de Shannon plus faible ≈ répertoire plus “dominé” par quelques gros clones, donc plus d’expansion clonale et moins d’homogénéité entre clones.
+
+# Les deux autres conditions (CD40cov2_CTVpos) sont intermédiaires et proches l’une de l’autre, indiquant une diversité clonale comparable.
+p <- clonalDiversity(subset(MergeP0354_Norm, subset = !is.na(sample_id)), 
+                     group.by = "sample_id",
+                     cloneCall="clone_id", 
+                     metric = "shannon") 
+p <- p +  scale_color_manual(values = cols_merge, name = "Condition") +
+  scale_fill_manual(values = cols_merge,  name = "Condition")
+p
+
+```
+
+
+
+
+### SHM in each seurat clsuters 
+
+
+```{r, echo=FALSE, fig.height= 5.5, fig.width= 13, warning=FALSE}
+# pal_clusters <- scales::hue_pal()(length(levels(Idents(MergeP0354_Norm))))
+library(RColorBrewer)
+
+
+# Vérifier
+print("Nombre clusters:")
+print(length(levels(Idents(MergeP0354_Norm))))
+print("Nombre couleurs:")
+print(length(pal_clusters))
+
+
+
+# Option 1 : enlever les cellules sans valeur
+obj_noNA <- subset(MergeP0354_Norm, subset = !is.na(new_mu_freq))
+
+vln1 <- VlnPlot(
+  obj_noNA,
+  # features = "new_mu_freq",
+  features = "new_mu_freq_pct",
+  group.by = "seurat_clusters",
+  #cols     = pal_clusters,
+  pt.size  = 0.1
+) +
+  ylab("V mutation frequency") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+vln1
+ggsave(
+  paste0(folder, "Figures/0354_clusters_mutations_violin_24_03_2026.png"),
+  vln1,
+  bg = "white", width = 11, height = 5, dpi = 1200
+)
+```
+
+
+#### AICDA EXPRESSION LEVEL IN EACH SEURAT CLUSTER
+
+```{r, echo=FALSE, fig.height= 5.5, fig.width= 13, warning=FALSE}
+vln1_aicda <- VlnPlot(
+  obj_noNA,
+  features = "AICDA",
+  group.by = "seurat_clusters",
+  #cols     = pal_clusters,
+  pt.size  = 0.1
+) +
+  ylab("V mutation frequency") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+vln1_aicda
+ggsave(
+  paste0(folder, "Figures/0354_clusters_AICDA_EXP_violin_15_01_2026.png"),
+  vln1_aicda,
+  bg = "white", width = 11, height = 5, dpi = 1200
+)
+```
+
+
+#### ASSOCIATION V-J
+###### circosplot top 10
+
+```{r, echo=FALSE, fig.height= 4, fig.width= 5}
+library(circlize)
+
+condition.order <- c("Naive", "BMZ", "Memory", "Spikepos" ,"Novavax_CTVpos", "Novavax_CTVneg", "Sanofi_CTVpos","Sanofi_CTVneg", "CD40Cov2_CTVpos","CD40Cov2_CTVneg")
+
+ 
+load("C:/Users/209352/Downloads/legende_VCHAIN.RDATA")
+color.v<-code_color
+color.v=c(code_color,
+          c("IGHJ1"="#FFBF00", "IGHJ2"="#40826D", "IGHJ3"="#967969", "IGHJ4"="#CC7722",  "IGHJ5"="#808000", "IGHJ7"="#1F51FF",   "IGHJ6"="#A52A2A"))
+
+
+sc_bcr_data.VJ<-shm_db_0354 %>% filter(locus=="IGH") %>% 
+  group_by(v_gene, j_gene, sample_id ) %>%
+  summarise(clonotype = n()) %>%
+  arrange(desc(clonotype)) %>%
+  group_by(sample_id ) %>%
+  mutate(clonotype.p=(clonotype/sum(clonotype))*100) %>%
+  ungroup() %>%
+  as.data.frame()
+
+write.csv(sc_bcr_data.VJ,paste0(folder,"/Files/matrice_VJ_chord_plot_D0.csv"), row.names = FALSE)
+
+cc<-shm_db_0354 %>% filter(locus=="IGH") %>% 
+  group_by(sample_id, v_gene) %>%
+  summarise(Count=n()) %>%
+  arrange(sample_id, desc(Count)) %>%
+  group_by(sample_id) %>%
+  mutate( clonotype.p= (Count/sum(Count))*100) %>%
+  ungroup()
+
+
+for(i in condition.order){
+  #i<-"D0_Unstim"
+  top.10.v<-cc[which(cc$sample_id==i),]$v_gene[1:10]
+  
+  sc_bcr_data.VJ.top<-sc_bcr_data.VJ[which(sc_bcr_data.VJ$sample_id==i &sc_bcr_data.VJ$v_gene %in% top.10.v),]
+  topJ<-sc_bcr_data.VJ.top%>% group_by(j_gene)%>% summarise(count=sum(clonotype.p))
+  topJ<-topJ[order(topJ$count, decreasing = TRUE),]
+  
+  unique(sc_bcr_data.VJ.top$j_gene)
+  grid.col =color.v
+  
+  png(paste0(folder,"/Figures/0354_chordplot.V.J_",i,"_1.png"), width = 6.1, height = 6.6 , units = "in" , res=1200) 
+  par(cex = 0.8, mar = c(0, 0, 0, 0))
+  chord.plot<-chordDiagram(sc_bcr_data.VJ.top[,c(1,2,3,5)],annotationTrack = "grid",grid.col = grid.col,preAllocateTracks = 1, order = c(top.10.v,topJ$j_gene) )
+  circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    sector.name = get.cell.meta.data("sector.index")
+    circos.text(mean(xlim), ylim[1] + .3, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(0, 0.5), font = 2, cex = 1.3)
+    circos.axis(h = "top", labels.cex = 1.3, major.tick.length = 0.2, sector.index = sector.name, track.index = 2)
+  }, bg.border = NA)
+  
+  dev.off()
+}
+```
+
