@@ -1,5 +1,5 @@
 
-title: "sc BCR 0354"
+title: " BCR analysis + scRNA‑seq of P0354 (from IgBlast output to integrated scRNA‑seq/BCR profiling"
 output: html_notebook
 
 
