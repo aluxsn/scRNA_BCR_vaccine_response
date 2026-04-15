@@ -3,6 +3,8 @@ title: " BCR analysis + scRNA‑seq of P0354 (from IgBlast output to integrated 
 output: html_notebook
 
 
+Integration scRNA + BCR analysis Linking clonal groups with Seurat metadata “Clonotype overlay” on UMAPs, Mutation Analysis (SHM) VH mutation profiling CDR3 mutation quantification Mapping mutated cells on UMAP Comparing mutation levels across vaccine platforms
+
 
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
