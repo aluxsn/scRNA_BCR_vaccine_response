@@ -4,7 +4,8 @@ author: "Assane FALL"
 date: "2026-10-08"
 output: html_document
 
-Merge script that combines all pre‑filtered Seurat objects from the P0352 patient (Naïve, BMZ, Memory, Spike, Vaccines and CD40Cov2 conditions) into a single Seurat object, then applies normalization (NormalizeData) to prepare for downstream integration and combined scRNA‑seq/BCR analyses.
+Merge script that combines all pre‑filtered Seurat objects from the P0352 patient (Naïve, BMZ, Memory, Spike, Vaccines and CD40Cov2 conditions)
+into a single Seurat object, then applies normalization (NormalizeData) to prepare for downstream integration and combined scRNA‑seq/BCR analyses.
 ---
 
 ```{r setup, include=FALSE}
