@@ -1,0 +1,493 @@
+---
+title: " P0352 scBCR Merged"
+author: "Assane FALL"
+date: "2026-10-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("C:/Users/209352/OneDrive - UPEC/SC_aCD40_BCR_vaccins/")
+```
+### P0352 J0 & J7
+```{r,  echo=FALSE}
+set.seed(1234)
+library(ggplot2)
+library(Seurat)
+```
+
+
+##### Load Seurat objects filtered after QC (for merging)
+```{r, echo =FALSE}
+
+folder <- "C:/Users/209352/OneDrive - UPEC/SC_aCD40_BCR_vaccins/FRENCHCOVID/GEX_filtered_feature_bc_matrix.h5/0352/Files/"
+
+load(paste0(folder, "P0352_Naive_Bcells_filtered.RDATA"))
+load(paste0(folder, "P0352_BMZ_Bcells_filtered.RDATA"))
+load(paste0(folder, "P0352_Spikepos_Bcells_filtered.RDATA"))
+load(paste0(folder, "P0352_Memory_Bcells_filtered.RDATA"))
+
+load(paste0(folder, "P0352_Novavax_CTVpos_filtered.RDATA"))
+load(paste0(folder, "P0352_Novavax_CTVneg_filtered.RDATA"))
+load(paste0(folder, "P0352_Sanofi_CTVpos_filtered.RDATA"))
+load(paste0(folder, "P0352_Sanofi_CTVneg_filtered.RDATA"))
+load(paste0(folder, "P0352_CD40cov2_CTVneg_filtered.RDATA"))
+load(paste0(folder, "P0352_CD40cov2_CTVpos_filtered.RDATA"))
+```
+
+```{r, echo=FALSE}
+cols <-  c(
+    "P0352_Naive" = "#0047AB",
+    "P0352_BMZ" = "#FFC300",
+    "P0352_Spikepos" = "#C70039",
+    "P0352_Memory" = "#008000",
+
+    "P0352_Novavax_CTVpos" = "yellow",
+    "P0352_Novavax_CTVneg" = "lightgreen",
+    "P0352_Sanofi_CTVpos" = "#FF4500",   # orange rouge (Sanofi pos)
+  "P0352_Sanofi_CTVneg" = "#DDA0DD",  
+    "P0352_CD40cov2_CTVpos" = "purple",
+    "P0352_CD40cov2_CTVneg" = "lightblue"
+  )
+```
+
+### P0352 D0 and D7
+#### Merge seurat objects
+```{r , echo=FALSE}
+MergeP0352 <- merge(
+  x = P0352_Naive_Bcells_filtered,
+  y = list(P0352_BMZ_Bcells_filtered, P0352_Spikepos_Bcells_filtered, P0352_Memory_Bcells_filtered, P0352_Novavax_CTVpos_filtered, P0352_Novavax_CTVneg_filtered, P0352_Sanofi_CTVpos_filtered, P0352_Sanofi_CTVneg_filtered,
+           P0352_CD40cov2_CTVpos_filtered, P0352_CD40cov2_CTVneg_filtered),
+  add.cell.ids = c("Naive", "BMZ",  "Spikepos", "Memory", "Novavax_CTVpos",  "Novavax_CTVneg", "Sanofi_CTVpos", "Sanofi_CTVneg","CD40Cov2_CTVpos", "CD40Cov2_CTVneg"),
+  project = "MergeP0352"
+)
+save(MergeP0352, file = paste0(folder, 'MergeP0352_25032026.rdata'))
+```
+
+
+```{r , echo=FALSE}
+load(paste0(folder, 'MergeP0352_25032026.rdata'))
+
+```
+
+##### normalization
+```{r , echo=FALSE}
+
+MergeP0352_Norm <- NormalizeData(MergeP0352)
+MergeP0352_Norm <- FindVariableFeatures(MergeP0352_Norm)
+MergeP0352_Norm <- ScaleData(MergeP0352_Norm)
+MergeP0352_Norm <- RunPCA(MergeP0352_Norm)
+
+
+```
+
+
+```{r}
+# # 6️ Visualisation
+ElbowPlot(MergeP0352_Norm, ndims = 30)
+DimPlot(MergeP0352_Norm, reduction = "pca", group.by = "orig.ident", cols =  cols) +
+  ggtitle("PCA of MergeP0352 -normalized data")
+```
+
+
+
+```{r, echo=FALSE}
+
+MergeP0352_Norm <- FindNeighbors(MergeP0352_Norm, dims = 1:20)
+MergeP0352_Norm <- FindClusters(MergeP0352_Norm, resolution = 0.5)
+ 
+```
+
+
+
+```{r, echo=FALSE}
+MergeP0352_Norm <- RunUMAP(MergeP0352_Norm, dims = 1:20)
+```
+
+
+
+
+```{r, echo=FALSE,  fig.height= 6, fig.width= 6}
+DimPlot(MergeP0352_Norm, reduction = "umap", group.by = "orig.ident",  cols = cols)
+# 
+save(MergeP0352_Norm, file = paste0(folder, 'Merge_P0352_Norm_25-03-2026.rdata'))
+```
+
+
+### Marqueurs principaux (B cells)
+```{r, echo=FALSE, fig.width= 10, fig.height= 7}
+
+FeaturePlot(MergeP0352_Norm, features = c("CD19","MS4A1","CD79A","CD79B", "IGHM", "IGHD", "IGHG1", "IGHG2", "IGHG3", "IGHG4", "IGHA1", "IGHA2")) # B cells
+FeaturePlot(MergeP0352_Norm, features = c("IGHM", "IGHD", "IGHG1", "IGHG2", "IGHG3", "IGHG4", "IGHA1", "IGHA2", "IGHE")) # B cells heavy chain
+FeaturePlot(MergeP0352_Norm, features = c("IGKC","IGKC", "IGLC1","IGLC2","IGLC3","IGLC6","IGLC7")) # B cells features_light chain
+```
+
+
+
+
+
+```{r, echo=FALSE,  fig.height= 5, fig.width= 6}
+dplot1 <- DimPlot(MergeP0352_Norm, reduction = "umap", group.by = "orig.ident",  cols = cols) + ggtitle("UMAP of B cell subgroups from P0352 at D0 and D7")
+dplot1
+ggsave(paste0(folder,"Figures/Dimplot1_03_04_2026.png"),dplot1, width = 11, height = 5, dpi = 1000)
+dplot2 <- DimPlot(MergeP0352_Norm, reduction = "umap", label = T, repel = T) + ggtitle("UMAP projection of B cell clusters from P0352 at D0 and D7")
+dplot2
+ggsave(paste0(folder,"Figures/Dimplot2_03_04_2026.png"),dplot2, width = 11, height = 5, dpi = 1000)
+```
+
+
+```{r, echo=FALSE,  fig.height= 5, fig.width= 10}
+
+dplot3 <- DimPlot(MergeP0352_Norm, reduction = "umap", group.by = "orig.ident", split.by = "orig.ident", cols = cols) + ggtitle("UMAP of single-cell BCR repertoires at D0 and D7, split by B cell subsets")
+dplot3
+ggsave(paste0(folder,"Figures/Dimplot3_03_04_2026.png"),dplot3, width = 17, height = 7, dpi = 1000)
+
+
+dplot4 <- DimPlot(MergeP0352_Norm, reduction = "umap", group.by = "seurat_clusters", split.by = "orig.ident") + ggtitle("UMAP of single-cell BCR repertoires at D5, split by B cell subsets")
+dplot4
+ggsave(paste0(folder,"Figures/Dimplot4_03_04_2026.png"),dplot4, width = 17, height = 7, dpi = 1000)
+```
+
+
+
+
+### UMAP
+
+```{r, echo=FALSE,  fig.height= 6, fig.width= 8}
+library(dplyr)
+library(ggrepel)
+
+# Extraire coordonnées UMAP et sample
+umap_coords <- Embeddings(MergeP0352_Norm, "umap") %>% as.data.frame()
+umap_coords$orig.ident <- MergeP0352_Norm@meta.data$orig.ident
+
+# Calculer positions moyennes par sample
+label_positions <- umap_coords %>%
+  group_by(orig.ident) %>%
+  summarise(umap_1 = mean(umap_1), umap_2 = mean(umap_2))
+
+
+# Plot avec halo blanc autour du texte noir
+p <- DimPlot(
+  MergeP0352_Norm,
+  reduction = "umap",
+  group.by = "orig.ident",
+  label = FALSE,
+  cols = cols
+) + theme(
+  legend.text = element_text(face = "bold"),
+  legend.title = element_text(face = "bold"),
+  plot.title = element_text(face = "bold"),
+  strip.text = element_text(face = "bold")
+) +
+  geom_text_repel(
+    data = label_positions,
+    aes(x = umap_1, y = umap_2, label = orig.ident),
+    size = 5,
+    fontface = "bold",
+    color = "black",
+    bg.color = "white",   # halo blanc
+    bg.r = 0.2,           # épaisseur du halo
+    segment.color = NA    # pas de lignes de liaison
+  ) + ggtitle("UMAP of B cell subgroups from P0352 at D0 and D7")
+
+p
+ggsave(paste0(folder,"Figures/Dimplot4_03_04_2026.png"),p, width = 10, height = 7, dpi = 1000)
+```
+
+
+
+```{r, echo=FALSE,  fig.height= 6, fig.width= 13}
+library(Seurat)
+library(patchwork)
+
+# Liste des gènes à visualiser
+genes_to_plot <- c("MS4A1", "CD79A", "IGHM", "IGHD", 
+                   "CD27", "IGHG1", "IGHG2", "IGHG3", 
+                   "IGHA1", "CD40")
+
+# Vérifie que les gènes sont bien présents 
+genes_to_plot <- genes_to_plot[genes_to_plot %in% rownames(MergeP0352_Norm)]
+
+# Crée une liste de FeaturePlot pour chaque gène
+feature_plots <- lapply(genes_to_plot, function(gene) {
+  FeaturePlot(MergeP0352_Norm, features = gene, reduction = "umap",
+              cols = c("grey90", "blue"),
+              pt.size = 0.5) + ggtitle(gene)
+})
+
+# Ajoute le DimPlot pour la variable d'identité (ex: orig.ident ou celltype)
+p_ident <- DimPlot(MergeP0352_Norm, reduction = "umap", group.by = "orig.ident", 
+                   label = FALSE, cols = cols) + ggtitle("orig.ident")
+p_ident
+# Combine les plots en grille
+final_plot <- wrap_plots(c(feature_plots, list(p_ident)), ncol = 4)
+
+# Affiche le résultat
+final_plot
+
+ggsave(paste0(folder,"/Figures/Markers_P035_EXP_05_11_2026.png"),final_plot, width = 14.5, height = 7, dpi = 1000)
+```
+
+```{r, echo=FALSE,  fig.height= 5, fig.width= 6}
+#Features and Marker genes expression
+library(patchwork)
+#Pan-B
+
+
+fP0352 <- FeaturePlot(
+  MergeP0352_Norm,
+  features = c("CD19","MS4A1","CD79A","CD79B"),
+  cols = c("lightgrey","blue")
+)
+
+fP0352 <- fP0352 + plot_annotation(
+  title = "Expression of Pan-B cell markers",
+  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+)
+
+
+ggsave(
+  filename = paste0(folder, "Figures/PAN-B_EXP_03_04_2026.png"),
+  plot = fP0352,
+  width = 5,
+  height = 4,
+  dpi = 1000
+)
+
+#Naive
+# FeaturePlot(MergeP0352_Norm, features = c("IGHM", "IGHD", "TCL1A"), cols = c("lightgrey","blue")) + ggtitle("Expression of Naive B cell markers")
+
+
+fP0352 <- FeaturePlot(
+  MergeP0352_Norm, 
+  features = c("IGHM", "IGHD", "TCL1A"), 
+  cols = c("lightgrey","blue")
+)
+
+fP0352 <- fP0352 + plot_annotation(
+  title = "Expression of Naive B cell markers",
+  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+)
+
+
+ggsave(
+  filename = paste0(folder, "Figures/Naive_Bcell_EXP_03_04_2026.png"),
+  plot = fP0352,
+  width = 5,
+  height = 4,
+  dpi = 1000
+)
+
+
+
+#Memory
+# FeaturePlot(MergeP0352_Norm, features = c("CD27", "IGHG1", "IGHA1"), cols = c("lightgrey","blue")) + ggtitle("Expression of Memory B cell markers")
+
+
+fp3 <- FeaturePlot(
+  MergeP0352_Norm, 
+  features = c("CD27", "IGHG1", "IGHA1"), 
+  cols = c("lightgrey","blue")
+)
+
+fp3 <- fp3 + plot_annotation(
+  title = "Expression of Memory B cell markers",
+  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+)
+
+
+ggsave(
+  filename = paste0(folder, "Figures/Memory_Bcell_EXP_03_04_2026.png"),
+  plot = fp3,
+  width = 5,
+  height = 4,
+  dpi = 1000
+)
+
+
+#Plasmablast/PlasmaCell
+# FeaturePlot(MergeP0352_Norm, features = c("CD38", "SDC1", "PRDM1", "XBP1", "MZB1", "IRF4"), cols = c("lightgrey","blue")) + ggtitle("Expression of PlasmaCell markers")
+
+fp4 <- FeaturePlot(
+  MergeP0352_Norm, 
+  features = c("CD38", "SDC1", "PRDM1", "XBP1", "MZB1", "IRF4"), 
+  cols = c("lightgrey","blue")
+)
+
+fp4 <- fp4 + plot_annotation(
+  title = "Expression of PlasmaCell markers",
+  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+)
+
+
+ggsave(
+  
+  filename = paste0(folder, "Figures/PlasmaCell_EXP_03_04_2026.png"),
+  plot = fp4,
+  width = 6,
+  height = 7,
+  dpi = 1000
+)
+
+#GC
+# FeaturePlot(MergeP0352_Norm, features = c( "BCL6", "AICDA"), cols = c("lightgrey","blue")) + ggtitle("Expression of GC B cell markers")
+
+fp5 <- FeaturePlot(
+  MergeP0352_Norm, 
+  features = c( "BCL6", "AICDA"), 
+  cols = c("lightgrey","blue")
+)
+
+fp5 <- fp5 + plot_annotation(
+  title = "GC B Cell markers",
+  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+)
+
+
+ggsave(
+  
+  filename = paste0(folder, "Figures/GC_Bcell_EXP_03_04_2026.png"),
+  plot = fp5,
+  width = 6,
+  height = 3,
+  dpi = 1000
+)
+
+#Activated 
+#FeaturePlot(MergeP0352_Norm, features = c("CD86", "HLA-DRA", "CD83", "FAS"), cols = c("lightgrey","blue")) + ggtitle("Expression of Activated B cell markers")
+
+fp6 <- FeaturePlot(
+  MergeP0352_Norm, 
+  features = c("CD86", "HLA-DRA", "CD83", "FAS"), 
+  cols = c("lightgrey","blue")
+)
+
+fp6 <- fp6 + plot_annotation(
+  title = "Expression of Activated B cell markers",
+  theme = theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+)
+
+
+ggsave(
+  
+  filename = paste0(folder, "Figures/activated_Bcell_EXP_03_04_2026.png"),
+  plot = fp6,
+  width = 5,
+  height = 4,
+  dpi = 1000
+)
+
+```
+
+
+```{r, echo=FALSE,  fig.height= 6, fig.width= 13}
+# library(Seurat)
+# library(patchwork)
+
+# Liste des gènes à visualiser
+# genes_to_plot <- c("MS4A1", "CD79A", "IGHM", "IGHD", 
+#                    "CD27", "IGHG1", "IGHG2", "IGHG3", 
+#                    "IGHA1", "CD40")
+
+# Vérifie que les gènes sont bien présents dans ton objet
+# genes_to_plot <- genes_to_plot[genes_to_plot %in% rownames(MergeP0352_J7_Norm)]
+# 
+# # Crée une liste de FeaturePlot pour chaque gène
+# feature_plots <- lapply(genes_to_plot, function(gene) {
+#   FeaturePlot(MergeP0352_J7_Norm, features = gene, reduction = "umap",
+#               cols = c("grey90", "blue"),
+#               pt.size = 0.5) + ggtitle(gene)
+# })
+# 
+# # Ajoute le DimPlot pour la variable d'identité (ex: orig.ident ou celltype)
+# p_ident <- DimPlot(MergeP0352_J7_Norm, reduction = "umap", group.by = "orig.ident", 
+#                    label = FALSE, cols = cols) + ggtitle("orig.ident")
+# 
+# # Combine les plots en grille
+# final_plot <- wrap_plots(c(feature_plots, list(p_ident)), ncol = 4)
+# 
+# # Affiche le résultat
+# final_plot
+# 
+# ggsave(paste0(folder,"/Figures_J7/Markers_P0352_J7_EXP_05_11_2026.png"),final_plot, width = 14.5, height = 7, dpi = 1000)
+```
+```{r, echo=FALSE,  fig.height= 6, fig.width= 10}
+#Features and Marker genes expression
+#Pan-B
+# FeaturePlot(MergeP0352_J7_Norm, features = c("CD19","MS4A1","CD79A","CD79B"), cols = c("lightgrey","blue"))
+# #Naive
+# FeaturePlot(MergeP0352_J7_Norm, features = c("IGHM", "IGHD", "TCL1A"), cols = c("lightgrey","blue"))
+# #Memory
+# FeaturePlot(MergeP0352_J7_Norm, features = c("CD27", "IGHG1", "IGHA1"), cols = c("lightgrey","blue"))
+# #Plasmablast/PlasmaCell
+# FeaturePlot(MergeP0352_J7_Norm, features = c("CD38", "SDC1", "PRDM1", "XBP1", "MZB1", "IRF4"), cols = c("lightgrey","blue"))
+# #GC
+# FeaturePlot(MergeP0352_J7_Norm, features = c( "BCL6", "AICDA"), cols = c("lightgrey","blue"))
+# #Activated 
+# FeaturePlot(MergeP0352_J7_Norm, features = c("CD86", "HLA-DRA", "CD83", "FAS"), cols = c("lightgrey","blue"))
+```
+```{r, echo=FALSE, fig.height= 7.5, fig.width= 11.4}
+# AICDA <- FeaturePlot(MergeP0352_J7_Norm, features = c("AICDA"), split.by = "orig.ident", ncol = 4 )
+# IGHM <- FeaturePlot(MergeP0352_Norm, features = c("IGHM"), split.by = "orig.ident", ncol = 4) 
+# AICDA + IGHM
+# library(patchwork)
+# 
+# # Crée les deux plots séparément
+# AICDA <- FeaturePlot(MergeP0352_J7_Norm, features = "AICDA", split.by = "orig.ident", ncol = 4)
+# IGHM <- FeaturePlot(MergeP0352_J7_Norm, features = "IGHM",  split.by = "orig.ident", ncol = 4) &
+#         theme(plot.title = element_blank())
+# IGHG3 <- FeaturePlot(MergeP0352_J7_Norm, features = "IGHG3", split.by = "orig.ident", ncol = 4) &
+#         theme(plot.title = element_blank())
+# IGHA1 <- FeaturePlot(MergeP0352_J7_Norm, features = "IGHA1",  split.by = "orig.ident", ncol = 4) &
+#         theme(plot.title = element_blank())
+# # Combine-les proprement
+# combined_plot <- wrap_plots(AICDA, IGHM, IGHG3, IGHA1, ncol = 1) + 
+#   plot_annotation(title = "Expression of AICDA, IGHM, IGHG3 and IGHA1 split by sample")
+# 
+# # Affiche le résultat
+# combined_plot
+# ggsave(paste0(folder,"Figures_J7/AICDA_IGHM_IGHG3_IGHA1_EXP_J7_28_10_2026.png"),combined_plot, width = 12.5, height = 7.6, dpi = 1000)
+
+```
+
+
+```{r, echo=FALSE, fig.height= 10.5, fig.width= 11.4}
+# 
+# library(Seurat)
+# library(patchwork)
+# 
+# # Génération des FeaturePlots
+# combined_plot1 <- FeaturePlot(
+#   MergeP0352_J7_Norm,
+#   features = c("PAX5", "IRF8", "SPIB", "IRF4", "PRDM1", "XBP1"),
+#   split.by = "orig.ident",
+#   #cols = c("lightgrey", "darkred"),
+#   ncol = 3
+# )
+# 
+# # Ajouter un titre global
+# combined_plot1 <- combined_plot1 +
+#   plot_annotation(
+#     title = "Transcriptional regulators of B cell to plasma cell differentiation (P0352, D5)",
+#     theme = theme(
+#       plot.title = element_text(
+#         size = 18, face = "bold", hjust = 0.5, vjust = 1
+#       )
+#     )
+#   )
+# 
+# # Afficher
+# combined_plot1
+# 
+# # Sauvegarde haute résolution
+# ggsave(
+#   filename = paste0(folder, "Figures_J7/B_cell_to_plasma_cell_differentiation_P0352_J7_29_10_2026.png"),
+#   plot = combined_plot1,
+#   width = 12.5,
+#   height = 12,
+#   dpi = 1000
+# )
+
+```
+
