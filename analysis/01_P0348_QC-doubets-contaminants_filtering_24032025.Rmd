@@ -1,6 +1,9 @@
 ---
 title: ""scRNA-seq QC, Doublet & Contaminants Filtering"
 output: html_notebook
+
+Performs quality control filtering to remove doublets and contaminating populations (e.g., T/NK cells, monocytes)
+from the P0352 B‑cell datasets, using tools such as DoubletFinder and manual marker‑based decontamination.
 ---
 
 ### P0352 
