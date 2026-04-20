@@ -54,6 +54,7 @@ CDR3 AA/NT sequences
 SHM rates
 Clonal groups
 Generation of a complete changeo table ready for scRepertoire integration
+
 3. scRepertoire Integration
 Clonal abundance
 Clonal expansion
@@ -61,6 +62,7 @@ CDR3 length distribution
 Isotype switching
 Linking clonal groups with Seurat metadata
 “Clonotype overlay” on UMAPs
+
 4. Mutation Analysis (SHM)
 VH mutation profiling
 CDR3 mutation quantification
