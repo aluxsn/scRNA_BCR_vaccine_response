@@ -37,7 +37,7 @@ Isotype usage and lineage features
 Ambient RNA correction
 Doublet removal
 QC (MT%, nFeature, nCount)
-Normalization (SCTransform)
+Normalization 
 Integration across all batches & stimulation conditions
 Dimensionality reduction (PCA, UMAP)
 Clustering & annotation
