@@ -10,6 +10,7 @@ This repository contains a fully reproducible workflow for the integrated analys
 The pipeline performs:
 
 Quality control and integration of scRNA-seq datasets
+
 BCR annotation using IgBLAST + Change-O (Nextflow)
 Clonal assignment and lineage features (scRepertoire)
 Mutation quantification (SHM)
@@ -32,6 +33,7 @@ Somatic hypermutation profiles (VH/CDR3)
 Clonal diversity
 Evolution of B-cell clones on UMAP space
 Isotype usage and lineage features
+
 ⚙️ Pipeline Components
 1. scRNA-seq (GEX) Analysis — Seurat v5
 Ambient RNA correction
@@ -42,7 +44,8 @@ Integration across all batches & stimulation conditions
 Dimensionality reduction (PCA, UMAP)
 Clustering & annotation
 Visualization of vaccine responses
-2. BCR Annotation — Nextflow IgBLAST/Change-O
+
+3. BCR Annotation — Nextflow IgBLAST/Change-O
 
 A reproducible Nextflow workflow performing:
 
@@ -56,6 +59,7 @@ Clonal groups
 Generation of a complete changeo table ready for scRepertoire integration
 
 3. scRepertoire Integration
+   
 Clonal abundance
 Clonal expansion
 CDR3 length distribution
@@ -63,7 +67,7 @@ Isotype switching
 Linking clonal groups with Seurat metadata
 “Clonotype overlay” on UMAPs
 
-4. Mutation Analysis (SHM)
+5. Mutation Analysis (SHM)
 VH mutation profiling
 CDR3 mutation quantification
 Mapping mutated cells on UMAP
